@@ -1,0 +1,60 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+enum SystemRole {
+  SUPERADMIN
+  MANAGER
+  OPERATOR
+  VIEWER
+}
+
+model User {
+  id            String            @id @default(uuid())
+  email         String            @unique
+  passwordHash  String
+  name          String
+  role          SystemRole        @default(VIEWER)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Auditing: Tracking who executed specific commands on Teltonika
+  actionLogs    DeviceActionLog[]
+}
+
+model Device {
+  id            String            @id // Matches the Teltonika RMS 'device_id' string
+  name          String            // Custom alias given by your system
+  macAddress    String?           @unique
+  serialNumber  String?           @unique
+  isActive      Boolean           @default(true)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  // Relations
+  actionLogs    DeviceActionLog[]
+}
+
+model DeviceActionLog {
+  id           String   @id @default(uuid())
+  deviceId     String
+  userId       String
+  actionType   String   // e.g., "REBOOT", "CONFIG_WRITE", "COMMAND_EXECUTE"
+  scopeUsed    String   // Stores the specific scope used (e.g., "command:execute")
+  payload      Json?    // Optional parameters sent with the command
+  status       String   // "PENDING", "SUCCESS", "FAILED"
+  errorMessage String?
+  executedAt   DateTime @default(now())
+
+  // Relationships
+  device       Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([deviceId])
+  @@index([userId])
+}
