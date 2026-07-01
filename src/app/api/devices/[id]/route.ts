@@ -20,6 +20,19 @@ export async function GET(
     try {
       const rmsData = await getDevice(id);
       rmsDevice = rmsData?.data || null;
+
+      if (rmsDevice) {
+        // Sync status and basic info to local DB
+        await prisma.device.update({
+          where: { id },
+          data: {
+            name: rmsDevice.name || undefined,
+            macAddress: rmsDevice.mac || undefined,
+            serialNumber: rmsDevice.serial || undefined,
+            isActive: Number(rmsDevice.status) === 1,
+          },
+        });
+      }
     } catch {
       console.warn(`Failed to fetch device ${id} from Teltonika API`);
     }

@@ -23,14 +23,14 @@ export async function GET() {
               name: device.name || 'Unknown Device',
               macAddress: device.mac || null,
               serialNumber: device.serial || null,
-              isActive: device.status === 'online',
+              isActive: Number(device.status) === 1,
             },
             create: {
               id: String(device.id),
               name: device.name || 'Unknown Device',
               macAddress: device.mac || null,
               serialNumber: device.serial || null,
-              isActive: device.status === 'online',
+              isActive: Number(device.status) === 1,
             },
           });
         }

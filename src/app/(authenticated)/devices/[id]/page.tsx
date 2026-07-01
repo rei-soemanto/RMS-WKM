@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect, use, useCallback } from 'react';
 import Terminal from '@/components/Terminal';
 
 interface ActionLog {
@@ -24,6 +24,27 @@ interface Device {
   actionLogs: ActionLog[];
 }
 
+interface RemoteAccessConfig {
+  id: number;
+  name: string;
+  type: string;   // 'http' | 'ssh' | 'tcp'
+  port: number;
+  enabled: boolean;
+}
+
+interface ActiveSession {
+  configId: number;
+  url: string;
+  expiresAt: string;
+}
+
+const typeIcon: Record<string, string> = {
+  http: '🌐',
+  https: '🔒',
+  ssh: '🖥️',
+  tcp: '🔌',
+};
+
 export default function DeviceDetailPage({
   params,
 }: {
@@ -33,6 +54,13 @@ export default function DeviceDetailPage({
   const [device, setDevice] = useState<Device | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Remote Access state
+  const [remoteConfigs, setRemoteConfigs] = useState<RemoteAccessConfig[]>([]);
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteError, setRemoteError] = useState('');
+  const [activeSessions, setActiveSessions] = useState<Record<number, ActiveSession>>({});
+  const [connectingId, setConnectingId] = useState<number | null>(null);
 
   useEffect(() => {
     fetch(`/api/devices/${id}`)
@@ -49,6 +77,49 @@ export default function DeviceDetailPage({
         setLoading(false);
       });
   }, [id]);
+
+  const loadRemoteConfigs = useCallback(async () => {
+    setRemoteLoading(true);
+    setRemoteError('');
+    try {
+      const res = await fetch(`/api/devices/${id}/remote-access`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch');
+      setRemoteConfigs(Array.isArray(data.data) ? data.data : []);
+    } catch (err) {
+      setRemoteError(err instanceof Error ? err.message : 'Failed to load remote access configs');
+    } finally {
+      setRemoteLoading(false);
+    }
+  }, [id]);
+
+  const openRemoteSession = async (config: RemoteAccessConfig) => {
+    setConnectingId(config.id);
+    try {
+      const res = await fetch(`/api/devices/${id}/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ access_id: config.id, duration: 3600 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to create session');
+
+      // Store and open
+      setActiveSessions((prev) => ({
+        ...prev,
+        [config.id]: {
+          configId: config.id,
+          url: data.url,
+          expiresAt: data.expires_at,
+        },
+      }));
+      window.open(data.url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to connect');
+    } finally {
+      setConnectingId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -113,6 +184,103 @@ export default function DeviceDetailPage({
             {new Date(device.updatedAt).toLocaleString()}
           </div>
         </div>
+      </div>
+
+      {/* ── Remote Access Panel ─────────────────────────────────────── */}
+      <div style={{ marginBottom: 'var(--space-2xl)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)', marginBottom: 'var(--space-lg)' }}>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--text-primary)', margin: 0 }}>
+            Remote Access (RMS Connect)
+          </h2>
+          <button
+            className="btn btn-secondary"
+            style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+            onClick={loadRemoteConfigs}
+            disabled={remoteLoading}
+          >
+            {remoteLoading ? '⏳ Loading…' : remoteConfigs.length === 0 ? '🔌 Load Configs' : '↺ Refresh'}
+          </button>
+        </div>
+
+        {remoteError && (
+          <div className="login-error" style={{ marginBottom: 'var(--space-md)' }}>
+            {remoteError}
+          </div>
+        )}
+
+        {remoteConfigs.length > 0 ? (
+          <div style={{ display: 'flex', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
+            {remoteConfigs.map((cfg) => {
+              const session = activeSessions[cfg.id];
+              const isConnecting = connectingId === cfg.id;
+
+              return (
+                <div
+                  key={cfg.id}
+                  className="card"
+                  style={{ minWidth: '220px', flex: '1 1 220px', maxWidth: '320px' }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: 'var(--space-sm)' }}>
+                    <span style={{ fontSize: '1.4rem' }}>{typeIcon[cfg.type] ?? '🔗'}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.95rem' }}>
+                        {cfg.name}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {cfg.type} · Port {cfg.port}
+                      </div>
+                    </div>
+                  </div>
+
+                  {session && (
+                    <div style={{
+                      fontSize: '0.72rem',
+                      color: 'var(--accent-success)',
+                      marginBottom: 'var(--space-sm)',
+                      wordBreak: 'break-all',
+                    }}>
+                      ✓ Session active until {new Date(session.expiresAt).toLocaleTimeString()}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+                    <button
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.8rem', padding: '6px 14px', flex: 1 }}
+                      disabled={isConnecting || !cfg.enabled}
+                      onClick={() => openRemoteSession(cfg)}
+                    >
+                      {isConnecting ? '⏳ Connecting…' : session ? '↗ Open Again' : '↗ Open GUI'}
+                    </button>
+                    {session && (
+                      <button
+                        className="btn btn-secondary"
+                        style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+                        onClick={() => window.open(session.url, '_blank', 'noopener,noreferrer')}
+                        title={session.url}
+                      >
+                        🔗
+                      </button>
+                    )}
+                  </div>
+
+                  {!cfg.enabled && (
+                    <div style={{ fontSize: '0.72rem', color: 'var(--accent-warning)', marginTop: '6px' }}>
+                      ⚠ Disabled on device
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ) : !remoteLoading && (
+          <div className="card" style={{ padding: 'var(--space-lg)' }}>
+            <p className="text-muted" style={{ margin: 0, fontSize: '0.85rem' }}>
+              Click <strong>Load Configs</strong> to fetch RMS Connect configurations for this device
+              (HTTP web GUI, SSH, TCP tunnels). Requires the <code>device_remote_access:write</code> scope on your API token.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Terminal */}

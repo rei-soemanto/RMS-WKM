@@ -100,12 +100,110 @@ export async function getDeviceLogs(
   return rmsRequest<TeltonikaResponse<unknown[]>>(`/devices/${deviceId}/logs`);
 }
 
-// ─── Device Remote Access ───────────────────────────────────────────
+// ─── Device Remote Access (RMS Connect) ────────────────────────────
 
-export async function getRemoteAccessLinks(
+export interface RemoteAccessConfig {
+  id: number;
+  name: string;
+  type: string;       // 'http' | 'ssh' | 'tcp'
+  port: number;
+  enabled: boolean;
+  [key: string]: unknown;
+}
+
+export interface RemoteSession {
+  url: string;        // The temporary access URL
+  expires_at: string; // ISO timestamp when the link expires
+  [key: string]: unknown;
+}
+
+/**
+ * List all remote access configurations (HTTP, SSH, TCP) for a device.
+ * Requires scope: device_remote_access:read
+ */
+export async function getRemoteAccessConfigs(
   deviceId: string
-): Promise<unknown> {
-  return rmsRequest(`/devices/${deviceId}/remote-access`);
+): Promise<TeltonikaResponse<RemoteAccessConfig[]>> {
+  const rawData = await rmsRequest<TeltonikaResponse<any[]>>(
+    `/devices/remote-access?device_id=${deviceId}`
+  );
+
+  // Map the Teltonika API response schema to our UI component schema
+  const mappedConfigs: RemoteAccessConfig[] = (rawData.data || []).map((item) => ({
+    id: item.id,
+    name: item.is_main ? 'Device WebUI (Main)' : (item.name || 'Remote Config'),
+    type: item.protocol || 'http',
+    port: item.destination_port || 80,
+    enabled: true, // Default to enabled as Teltonika lists active configs
+  }));
+
+  return {
+    ...rawData,
+    data: mappedConfigs,
+  };
+}
+
+/**
+ * Start/Initiate an RMS Connect session channel.
+ * Requires scope: device_remote_access:write
+ */
+export async function createRemoteSession(
+  accessId: number,
+  durationSeconds: number = 3600
+): Promise<{ success: boolean; meta?: { channel?: string } }> {
+  return rmsRequest<{ success: boolean; meta?: { channel?: string } }>(
+    `/devices/connect/${accessId}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        duration: durationSeconds,
+      }),
+    }
+  );
+}
+
+/**
+ * List active RMS Connect sessions for an access configuration.
+ * Requires scope: device_remote_access:read
+ */
+export async function getRemoteSessions(
+  accessId: number
+): Promise<TeltonikaResponse<RemoteSession[]>> {
+  return rmsRequest<TeltonikaResponse<RemoteSession[]>>(
+    `/devices/connect/${accessId}/sessions`
+  );
+}
+
+/**
+ * Check the connection status of a Pusher channel.
+ * Note: This endpoint does NOT use the "/api" prefix and sits at the root.
+ */
+export async function getChannelStatus(
+  channelName: string
+): Promise<{ success: boolean; data?: Record<string, Array<{ status: string; value: string; errorCode?: number }>> }> {
+  const token = process.env.TELTONIKA_RMS_API_TOKEN;
+  if (!token) {
+    throw new TeltonikaAPIError('TELTONIKA_RMS_API_TOKEN is not configured', 500);
+  }
+
+  const url = `https://rms.teltonika-networks.com/status/channel/${channelName}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    throw new TeltonikaAPIError(
+      `Teltonika status API error: ${response.status} — ${errorText}`,
+      response.status
+    );
+  }
+
+  return response.json();
 }
 
 // ─── Export types ───────────────────────────────────────────────────
